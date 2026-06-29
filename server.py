@@ -442,14 +442,25 @@ async def _healthz(_request: Request) -> PlainTextResponse:
 
 
 class Gate(BaseHTTPMiddleware):
-    """Bearer auth for the MCP endpoint; /healthz stays open."""
+    """Bearer auth for the MCP endpoint only; everything else 404s.
+
+    The bearer is required on /mcp (and /mcp/*). Any other path — including the
+    OAuth discovery probes MCP clients make on startup (/.well-known/oauth-*,
+    /register) — returns 404, NOT 401. A 401 on those probes makes a client
+    believe OAuth is required and attempt an interactive authorization flow,
+    which hangs in headless/sandboxed clients (e.g. Claude Cowork) and surfaces
+    as a connection timeout. /healthz stays open.
+    """
 
     async def dispatch(self, request: Request, call_next):
-        if request.url.path == "/healthz":
+        path = request.url.path
+        if path == "/healthz":
             return await call_next(request)
-        if MCP_TOKEN and request.headers.get("authorization", "") != f"Bearer {MCP_TOKEN}":
-            return JSONResponse({"error": "unauthorized"}, status_code=401)
-        return await call_next(request)
+        if path == "/mcp" or path.startswith("/mcp/"):
+            if MCP_TOKEN and request.headers.get("authorization", "") != f"Bearer {MCP_TOKEN}":
+                return JSONResponse({"error": "unauthorized"}, status_code=401)
+            return await call_next(request)
+        return PlainTextResponse("not found", status_code=404)
 
 
 app = mcp.streamable_http_app()
